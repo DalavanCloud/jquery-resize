@@ -57,12 +57,12 @@
     jq_resize = $.resize = $.extend( $.resize, {} ),
     
     timeout_id,
+    active = false,
     
     // Reused strings.
     str_setTimeout = 'setTimeout',
     str_resize = 'resize',
     str_data = str_resize + '-special-event',
-    str_delay = 'delay',
     str_pendingDelay = 'pendingDelay',
     str_activeDelay = 'activeDelay',
     str_throttle = 'throttleWindow';
@@ -70,11 +70,10 @@
   // Property: jQuery.resize.delay
   // 
   // The numeric interval (in milliseconds) at which the resize event polling
-  // loop executes. Defaults to 250.
+  // loop executes. Defaults to 200.
   
-  jq_resize[ str_pendingDelay ] = 250;
+  jq_resize[ str_pendingDelay ] = 200;
   jq_resize[ str_activeDelay ] = 20;
-  jq_resize[ str_delay ] = jq_resize[ str_pendingDelay ];
   
   // Property: jQuery.resize.throttleWindow
   // 
@@ -181,7 +180,11 @@
       
       // If this is the last element removed, stop the polling loop.
       if ( !elems.length ) {
-        cancelAnimationFrame( timeout_id );
+        if (active) {
+          cancelAnimationFrame( timeout_id );
+        } else {
+          clearTimeout( timeout_id );
+        }
         
         //set the timeout_id to null, to make sure the loop is stopped
         timeout_id = null;
@@ -232,7 +235,15 @@
     
   };
   
-  function loopy() {    
+  function loopy(timestamp) {
+      // If this is the first call since switching to active polling, then save
+      // its timestamp; we need it to determine when to switch back to passive
+      // polling.  Note the || 1; this is just in case the first real timestamp
+      // is legitimately zero; in that case we still want a truthy value.
+      if (active === true) {
+        active = timestamp || 1;
+      }
+
       // Iterate over all elements to which the 'resize' event is bound.
       for (var i = elems.length - 1; i >= 0; i--) {
         var elem = $(elems[i]);
@@ -244,14 +255,11 @@
           
           // If element size has changed since the last time, update the element
           // data store and trigger the 'resize' event.
-        if ( data && ( width !== data.w || height !== data.h ) ) {
-          jq_resize[ str_delay ] = jq_resize[ str_activeDelay ];
+          if ( data && ( width !== data.w || height !== data.h ) ) {
             elem.trigger( str_resize, [ data.w = width, data.h = height ] );
-        } else {
-          jq_resize[ str_delay ] = jq_resize[ str_pendingDelay ];
+            active = timestamp || true;
           }
-        }
-        else {
+        } else {
           // resetting stored width and height so that resize event is triggered next time 
           data = elem.data(str_data);
           data.w = 0;
@@ -259,9 +267,16 @@
         }
       };
 
-      //request another animationFrame to poll the elements
-      if(timeout_id !== null)
-         timeout_id = window.requestAnimationFrame(loopy);
+      // Poll gently until there is a change, then requestAnimationFrame until
+      // a second passes without a resize event, at which point we switch back.
+      if (timeout_id !== null) {
+        if (active && (timestamp == null || timestamp - active < 1000)) {
+          timeout_id = window.requestAnimationFrame(loopy);
+        } else {
+          timeout_id = setTimeout(loopy, jq_resize[ str_pendingDelay ]);
+          active = false;
+        }
+      }
   };
   
     /**
@@ -275,7 +290,9 @@
             window.oRequestAnimationFrame      || 
             window.msRequestAnimationFrame     || 
             function( /* function FrameRequestCallback */ callback, /* DOMElement Element */ element ) {
-                return window.setTimeout( callback, jq_resize[ str_delay ] );
+                return window.setTimeout(function() {
+                    callback((new Date()).getTime());
+                }, jq_resize[ str_activeDelay ] );
             };
         })();
     }
